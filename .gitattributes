@@ -1,1 +1,4 @@
 * text=auto eol=lf
+
+# keep exact bytes (patch contains CRLF context lines)
+libultraship/cmake/dependencies/patches/*.patch -text

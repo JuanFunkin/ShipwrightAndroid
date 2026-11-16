@@ -172,8 +172,9 @@ void DrawTouchOverlay() {
     const bool menuOpen = SohMenuVisible();
     bool hide = (menuOpen || sOpen) && !sEdit;
 
-    // Two small buttons at the top centre: the SoH menu and the touch settings.
-    {
+    // Two small buttons at the top centre: the SoH menu and the touch settings. They are hidden while the SoH menu is
+    // open so they never cover it (the phone's back button closes the menu).
+    if (!menuOpen) {
         const float h = screen.y * 0.075f;
         const float w = h * 2.3f;
         const ImVec2 menuMin(screen.x * 0.5f - w - 6.0f, 6.0f), settingsMin(screen.x * 0.5f + 6.0f, 6.0f);

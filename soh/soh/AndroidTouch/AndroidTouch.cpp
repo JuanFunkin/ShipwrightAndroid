@@ -122,6 +122,8 @@ int EventWatch(void*, SDL_Event* event) {
     return 0;
 }
 
+std::atomic<bool> sBackPressed{ false };
+
 void EnsureWatch() {
     if (!sWatching) {
         sWatching = true;
@@ -148,6 +150,13 @@ float Dist(ImVec2 a, ImVec2 b) {
 namespace SohAndroid {
 
 // Every frame: reads the fingers, updates the virtual gamepad and draws the controls.
+// Android's back button (the triangle / back gesture) opens and closes the SoH menu.
+void HandleBackButton() {
+    if (sBackPressed.exchange(false)) {
+        ToggleSohMenu();
+    }
+}
+
 void DrawTouchOverlay() {
     if (!Enabled()) {
         return;
@@ -412,3 +421,12 @@ extern "C" void SohAndroid_InjectTouchPad(void* data) {
         pad->stick_y = static_cast<int8_t>(sy);
     }
 }
+
+#ifdef __ANDROID__
+#include <jni.h>
+// Called by SohActivity when the back button is pressed (UI thread): only sets a flag, the menu is toggled on the
+// render thread by HandleBackButton().
+extern "C" JNIEXPORT void JNICALL Java_com_shipofharkinian_SohActivity_nativeBackPressed(JNIEnv*, jclass) {
+    sBackPressed = true;
+}
+#endif

@@ -1,14 +1,98 @@
 package com.shipofharkinian;
 
+import android.content.Intent;
+import android.database.Cursor;
+import android.net.Uri;
 import android.os.Build;
+import android.provider.OpenableColumns;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
 
 import org.libsdl.app.SDLActivity;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+
 /** The game itself: SDL creates the window and runs libsoh.so. */
 public class SohActivity extends SDLActivity {
+    private static final int PICK_ROM = 7001;
+
+    // ROM picker used by the game's own extraction menu (called from native code, see Extract.cpp).
+    // state: 0 = idle, 1 = waiting, 2 = ROM copied, 3 = cancelled / failed
+    private static volatile int sPickState = 0;
+    private static volatile String sPickPath = "";
+
+    private static native void nativeBackPressed();
+
+    /** Native: opens the system file picker. */
+    public void pickRomFromNative() {
+        sPickState = 1;
+        sPickPath = "";
+        runOnUiThread(() -> {
+            try {
+                Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                intent.setType("*/*");
+                startActivityForResult(intent, PICK_ROM);
+            } catch (Exception e) {
+                sPickState = 3;
+            }
+        });
+    }
+
+    /** Native polls this. */
+    public int pickRomState() {
+        return sPickState;
+    }
+
+    public String pickRomPath() {
+        return sPickPath;
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != PICK_ROM) {
+            return;
+        }
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+            sPickState = 3;
+            return;
+        }
+        final Uri uri = data.getData();
+        new Thread(() -> {
+            try {
+                File dir = DataDir.dir();
+                dir.mkdirs();
+                File target = new File(dir, "rom.z64");
+                try (InputStream in = getContentResolver().openInputStream(uri);
+                     OutputStream out = new FileOutputStream(target)) {
+                    byte[] buffer = new byte[1 << 16];
+                    int n;
+                    while ((n = in.read(buffer)) > 0) {
+                        out.write(buffer, 0, n);
+                    }
+                }
+                sPickPath = target.getAbsolutePath();
+                sPickState = 2;
+            } catch (Exception e) {
+                sPickState = 3;
+            }
+        }).start();
+    }
+
+    /** The back button (triangle / back gesture) opens and closes the SoH menu instead of closing the game. */
+    @Override
+    public void onBackPressed() {
+        try {
+            nativeBackPressed();
+        } catch (UnsatisfiedLinkError ignored) {
+        }
+    }
+
     @Override
     protected void onCreate(android.os.Bundle savedInstanceState) {
         DataDir.exportToNative(); // before SDL starts the game

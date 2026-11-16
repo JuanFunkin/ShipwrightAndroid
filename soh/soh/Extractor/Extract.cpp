@@ -7,6 +7,10 @@
 #include "Extract.h"
 #include "TorchExtract.h"
 #include "portable-file-dialogs.h"
+#ifdef __ANDROID__
+#include <jni.h>
+#include <SDL.h>
+#endif
 #include "spdlog/spdlog.h"
 #include <ship/utils/binarytools/BitConverter.h>
 #include "soh/ShipUtils.h"
@@ -317,6 +321,47 @@ bool Extractor::GetRomPathFromBox() {
         return false;
     }
     mCurrentRomPath = nameBuffer;
+#elif defined(__ANDROID__)
+    // Android has no desktop file dialog: SohActivity opens the system file picker and copies the chosen ROM into
+    // the game folder. The window keeps pumping events while it waits, so the app can pause and resume normally.
+    {
+        JNIEnv* env = (JNIEnv*)SDL_AndroidGetJNIEnv();
+        jobject activity = (jobject)SDL_AndroidGetActivity();
+        if (env == nullptr || activity == nullptr) {
+            return false;
+        }
+        jclass cls = env->GetObjectClass(activity);
+        jmethodID start = env->GetMethodID(cls, "pickRomFromNative", "()V");
+        jmethodID state = env->GetMethodID(cls, "pickRomState", "()I");
+        jmethodID path = env->GetMethodID(cls, "pickRomPath", "()Ljava/lang/String;");
+        if (start == nullptr || state == nullptr || path == nullptr) {
+            env->ExceptionClear();
+            return false;
+        }
+        env->CallVoidMethod(activity, start);
+        int result = 1;
+        while (result == 1) {
+            SDL_PumpEvents();
+            SDL_Delay(50);
+            result = env->CallIntMethod(activity, state);
+        }
+        std::string picked;
+        if (result == 2) {
+            jstring str = (jstring)env->CallObjectMethod(activity, path);
+            if (str != nullptr) {
+                const char* chars = env->GetStringUTFChars(str, nullptr);
+                picked = chars;
+                env->ReleaseStringUTFChars(str, chars);
+                env->DeleteLocalRef(str);
+            }
+        }
+        env->DeleteLocalRef(cls);
+        env->DeleteLocalRef(activity);
+        if (picked.empty()) {
+            return false;
+        }
+        mCurrentRomPath = picked;
+    }
 #else
     if (!pfd::settings::available()) {
         std::string msg =

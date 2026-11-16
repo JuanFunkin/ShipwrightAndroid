@@ -21,6 +21,7 @@ void AndroidTouchWindow::Draw() {
             ImGui::GetIO().FontGlobalScale = scale;
         }
     }
+    SohAndroid::HandleBackButton();
     SohAndroid::DrawTouchOverlay();
     SohAndroid::DrawTouchSettings();
 }

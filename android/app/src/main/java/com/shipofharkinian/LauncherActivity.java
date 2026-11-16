@@ -37,7 +37,6 @@ import java.util.List;
  * with a percentage.
  */
 public class LauncherActivity extends Activity {
-    private static final int PICK_ROM = 1;
     // Bump to re-copy the bundled files after an update.
     private static final int ASSET_VERSION = 1;
 
@@ -52,9 +51,6 @@ public class LauncherActivity extends Activity {
     private File dataDir;
     private TextView status;
     private TextView percent;
-    private TextView hint;
-    private Button pickButton;
-    private Button playButton;
     private Button permissionButton;
     private ProgressBar progress;
     private boolean prepared = false;
@@ -78,9 +74,10 @@ public class LauncherActivity extends Activity {
         }
         prepared = true;
         permissionButton.setVisibility(View.GONE);
-        showProgress("Preparing the game files...", 0);
+        showProgress("Preparing files...", 0);
         new Thread(() -> {
             dataDir.mkdirs();
+            new File(dataDir, "tmp").mkdirs(); // temp folder the ROM extraction needs (Android has none)
             try {
                 copyBundledFiles();
             } catch (IOException e) {
@@ -165,7 +162,7 @@ public class LauncherActivity extends Activity {
         outer.addView(title);
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("Ocarina of Time on your phone");
+        subtitle.setText("Starting up...");
         subtitle.setTextSize(14);
         subtitle.setTextColor(ACCENT);
         subtitle.setGravity(Gravity.CENTER);
@@ -216,28 +213,11 @@ public class LauncherActivity extends Activity {
         permissionButton.setOnClickListener(v -> DataDir.requestAccess(this, 2));
         card.addView(permissionButton);
 
-        playButton = makeButton("Play", true);
-        playButton.setOnClickListener(v -> startGame());
-        card.addView(playButton);
-
-        pickButton = makeButton("Select the ROM file", true);
-        pickButton.setOnClickListener(v -> pickRom());
-        card.addView(pickButton);
-
-        hint = new TextView(this);
-        hint.setTextSize(12);
-        hint.setTextColor(TEXT_DIM);
-        hint.setGravity(Gravity.CENTER);
-        hint.setPadding(0, dp(14), 0, 0);
-        hint.setText("Files folder: /storage/emulated/0/com.shipofharkinian");
-        outer.addView(hint);
 
         setContentView(scroll);
     }
 
     private void hideButtons() {
-        pickButton.setVisibility(View.GONE);
-        playButton.setVisibility(View.GONE);
         permissionButton.setVisibility(View.GONE);
     }
 
@@ -282,121 +262,9 @@ public class LauncherActivity extends Activity {
 
     // ---- flow ----------------------------------------------------------------------------------
 
-    private boolean hasGameData() {
-        return new File(dataDir, "oot.o2r").exists();
-    }
-
-    private boolean hasRom() {
-        File[] files = dataDir.listFiles();
-        if (files == null) {
-            return false;
-        }
-        for (File f : files) {
-            String name = f.getName().toLowerCase();
-            if (name.endsWith(".z64") || name.endsWith(".n64") || name.endsWith(".v64")) {
-                return true;
-            }
-        }
-        return false;
-    }
-
+    /** Files are ready: open the game, whose own menu asks for the ROM (like on PC). */
     private void refresh() {
-        progress.setVisibility(View.GONE);
-        percent.setVisibility(View.GONE);
-        if (hasGameData()) {
-            startGame();
-            return;
-        }
-        hideButtons();
-        pickButton.setVisibility(View.VISIBLE);
-        if (hasRom()) {
-            status.setText("ROM found.\nThe first start extracts it (a few minutes), then the game opens.");
-            playButton.setText("Extract and play");
-            playButton.setVisibility(View.VISIBLE);
-            pickButton.setText("Select a different ROM");
-            pickButton.setBackground(secondaryBackground());
-            pickButton.setTextColor(TEXT);
-        } else {
-            status.setText("Select your Ocarina of Time ROM (.z64 / .n64 / .v64).\n"
-                    + "It is copied into the files folder and never leaves your phone.");
-            pickButton.setText("Select the ROM file");
-        }
-    }
-
-    private GradientDrawable secondaryBackground() {
-        GradientDrawable d = rounded(Color.argb(40, 255, 255, 255), dp(28));
-        d.setStroke(dp(1), Color.argb(120, 255, 255, 255));
-        return d;
-    }
-
-    private void pickRom() {
-        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        intent.addCategory(Intent.CATEGORY_OPENABLE);
-        intent.setType("*/*");
-        startActivityForResult(intent, PICK_ROM);
-    }
-
-    private long querySize(Uri uri) {
-        try (Cursor c = getContentResolver().query(uri, null, null, null, null)) {
-            if (c != null && c.moveToFirst()) {
-                int i = c.getColumnIndex(OpenableColumns.SIZE);
-                if (i >= 0 && !c.isNull(i)) {
-                    return c.getLong(i);
-                }
-            }
-        } catch (RuntimeException ignored) {
-        }
-        return -1;
-    }
-
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode != PICK_ROM || resultCode != RESULT_OK || data == null || data.getData() == null) {
-            return;
-        }
-        final Uri uri = data.getData();
-        final long total = querySize(uri);
-        showProgress("Copying the ROM...", total > 0 ? 0 : -1);
-        new Thread(() -> {
-            try {
-                // Remove older ROMs so only the selected one is used.
-                File[] old = dataDir.listFiles();
-                if (old != null) {
-                    for (File f : old) {
-                        String n = f.getName().toLowerCase();
-                        if (n.endsWith(".z64") || n.endsWith(".n64") || n.endsWith(".v64")) {
-                            f.delete();
-                        }
-                    }
-                }
-                try (InputStream in = getContentResolver().openInputStream(uri);
-                     OutputStream out = new FileOutputStream(new File(dataDir, "rom.z64"))) {
-                    byte[] buffer = new byte[1 << 16];
-                    long done = 0;
-                    int lastShown = -1;
-                    int n;
-                    while ((n = in.read(buffer)) > 0) {
-                        out.write(buffer, 0, n);
-                        done += n;
-                        if (total > 0) {
-                            int p = (int) (done * 1000 / total);
-                            if (p != lastShown) {
-                                lastShown = p;
-                                final int shown = p;
-                                runOnUiThread(() -> showProgress("Copying the ROM...", shown));
-                            }
-                        }
-                    }
-                }
-                runOnUiThread(this::refresh);
-            } catch (IOException e) {
-                runOnUiThread(() -> {
-                    showMessage("Could not copy the ROM:\n" + e.getMessage());
-                    pickButton.setVisibility(View.VISIBLE);
-                });
-            }
-        }).start();
+        startGame();
     }
 
     private void startGame() {
@@ -469,7 +337,7 @@ public class LauncherActivity extends Activity {
                     if (p != lastPermille) {
                         lastPermille = p;
                         final int shown = p;
-                        runOnUiThread(() -> showProgress("Preparing the game files...", shown));
+                        runOnUiThread(() -> showProgress("Preparing files...", shown));
                     }
                 }
             }

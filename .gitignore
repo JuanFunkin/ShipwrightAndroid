@@ -1,0 +1,9 @@
+android/app/build/
+android/build/
+android/.gradle/
+android/gradlew*
+android/gradle/
+android/local.properties
+android/app/src/main/jniLibs/
+android/app/src/main/assets/
+android/app/src/main/java/org/

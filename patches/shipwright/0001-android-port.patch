@@ -1,0 +1,141 @@
+diff --git a/soh/CMakeLists.txt b/soh/CMakeLists.txt
+index f356d21..fa03a9b 100644
+--- a/soh/CMakeLists.txt
++++ b/soh/CMakeLists.txt
+@@ -226,7 +226,12 @@ set(ALL_FILES
+ ################################################################################
+ # Target
+ ################################################################################
+-add_executable(${PROJECT_NAME} ${ALL_FILES})
++if(ANDROID)
++    # Android runs the game from a shared library: SDL starts it through SDL_main
++    add_library(${PROJECT_NAME} SHARED ${ALL_FILES})
++else()
++    add_executable(${PROJECT_NAME} ${ALL_FILES})
++endif()
+ 
+ if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
+ use_props(${PROJECT_NAME} "${CMAKE_CONFIGURATION_TYPES}" "${DEFAULT_CXX_PROPS}")
+diff --git a/soh/include/functions.h b/soh/include/functions.h
+index 22adf03..16d9f8d 100644
+--- a/soh/include/functions.h
++++ b/soh/include/functions.h
+@@ -62,12 +62,12 @@ u32 Locale_IsRegionNative(void);
+ #ifdef __WIIU__
+ void _assert(const char* exp, const char* file, s32 line);
+ #elif defined(__linux__)
+-void __assert(const char* exp, const char* file, s32 line) __THROW;
++void oot_unused_assert(const char* exp, const char* file, s32 line) __THROW;
+ #elif !defined(__APPLE__) && !defined(__SWITCH__) && !defined(__OpenBSD__)
+-void __assert(const char* exp, const char* file, s32 line);
++void oot_unused_assert(const char* exp, const char* file, s32 line);
+ #endif
+ #if defined(__APPLE__) && defined(NDEBUG)
+-void __assert(const char* exp, const char* file, s32 line);
++void oot_unused_assert(const char* exp, const char* file, s32 line);
+ #endif
+ void isPrintfInit(void);
+ void osSyncPrintfUnused(const char* fmt, ...);
+diff --git a/soh/soh/SohGui/SohGui.cpp b/soh/soh/SohGui/SohGui.cpp
+index 986f933..42b3cd6 100644
+--- a/soh/soh/SohGui/SohGui.cpp
++++ b/soh/soh/SohGui/SohGui.cpp
+@@ -35,6 +35,7 @@
+ #include "soh/Enhancements/debugger/SohStatsWindow.h"
+ #include "soh/Enhancements/debugger/valueViewer.h"
+ #include "soh/Enhancements/gameplaystatswindow.h"
++#include "soh/AndroidTouch/AndroidTouchWindow.h"
+ #include "soh/Enhancements/randomizer/randomizer_check_tracker.h"
+ #include "soh/Enhancements/randomizer/randomizer_entrance_tracker.h"
+ #include "soh/Enhancements/randomizer/randomizer_hint_tracker.h"
+@@ -96,6 +97,7 @@ std::shared_ptr<DLViewerWindow> mDLViewerWindow;
+ std::shared_ptr<ValueViewerWindow> mValueViewerWindow;
+ std::shared_ptr<MessageViewer> mMessageViewerWindow;
+ std::shared_ptr<GameplayStatsWindow> mGameplayStatsWindow;
++std::shared_ptr<AndroidTouchWindow> mAndroidTouchWindow;
+ std::shared_ptr<CheckTracker::CheckTrackerSettingsWindow> mCheckTrackerSettingsWindow;
+ std::shared_ptr<CheckTracker::CheckTrackerWindow> mCheckTrackerWindow;
+ std::shared_ptr<EntranceTracker::EntranceTrackerSettingsWindow> mEntranceTrackerSettingsWindow;
+@@ -229,6 +231,11 @@ void SetupGuiElements() {
+     mGameplayStatsWindow =
+         std::make_shared<GameplayStatsWindow>(CVAR_WINDOW("GameplayStats"), "Gameplay Stats", ImVec2(480, 550));
+     gui->AddGuiWindow(mGameplayStatsWindow);
++#ifdef __ANDROID__
++    mAndroidTouchWindow = std::make_shared<AndroidTouchWindow>(CVAR_WINDOW("AndroidTouch"), "Android touch controls", ImVec2(0, 0));
++    gui->AddGuiWindow(mAndroidTouchWindow);
++    mAndroidTouchWindow->Show();
++#endif
+     mCheckTrackerWindow = std::make_shared<CheckTracker::CheckTrackerWindow>(CVAR_WINDOW("CheckTracker"),
+                                                                              "Check Tracker", ImVec2(400, 540));
+     gui->AddGuiWindow(mCheckTrackerWindow);
+diff --git a/soh/soh/mixer.c b/soh/soh/mixer.c
+index 303a977..a9b27c8 100644
+--- a/soh/soh/mixer.c
++++ b/soh/soh/mixer.c
+@@ -384,7 +384,7 @@ static void aMixImplRef(uint16_t count, int16_t gain, uint16_t in_addr, uint16_t
+ void aMixImpl(uint16_t count, int16_t gain, uint16_t in_addr, uint16_t out_addr) {
+ #if defined(__SSE2__) || defined(_M_AMD64)
+     aMixImplSSE2(count, gain, in_addr, out_addr);
+-#elif defined(__ARM_NEON)
++#elif (defined(__ARM_NEON) && defined(__aarch64__))
+     aMixImplNEON(count, gain, in_addr, out_addr);
+ #else
+     aMixImplRef(count, gain, in_addr, out_addr);
+@@ -714,7 +714,7 @@ static void aMixImplSSE2(uint16_t count, int16_t gain, uint16_t in_addr, uint16_
+     }
+ }
+ #endif
+-#if defined(__ARM_NEON)
++#if (defined(__ARM_NEON) && defined(__aarch64__))
+ #include <arm_neon.h>
+ static const int32_t x4000Arr[4] = { 0x4000, 0x4000, 0x4000, 0x4000 };
+ void aMixImplNEON(uint16_t count, int16_t gain, uint16_t in_addr, uint16_t out_addr) {
+diff --git a/soh/src/code/main.c b/soh/src/code/main.c
+index 4e68d5d..566f288 100644
+--- a/soh/src/code/main.c
++++ b/soh/src/code/main.c
+@@ -1,3 +1,9 @@
++#ifdef __ANDROID__
++#include <SDL.h>
++#include <stdlib.h>
++#include <unistd.h>
++#endif
++
+ #ifdef _WIN32
+ #include <Windows.h>
+ #include <locale.h>
+@@ -59,6 +65,14 @@ int SDL_main(int argc, char* argv[]) {
+ 
+ #else //_WIN32
+ int main(int argc, char* argv[]) {
++#ifdef __ANDROID__
++    // The extractor reads ./assets and writes oot.o2r into the working directory: use the game folder.
++    if (getenv("SOH_ANDROID_DATA_DIR") != NULL) {
++        chdir(getenv("SOH_ANDROID_DATA_DIR"));
++    } else if (SDL_AndroidGetExternalStoragePath() != NULL) {
++        chdir(SDL_AndroidGetExternalStoragePath());
++    }
++#endif
+ #endif
+     GameConsole_Init();
+     InitOTR(argc, argv);
+diff --git a/soh/src/code/padmgr.c b/soh/src/code/padmgr.c
+index 173b033..f573886 100644
+--- a/soh/src/code/padmgr.c
++++ b/soh/src/code/padmgr.c
+@@ -6,6 +6,7 @@
+ #include "soh/Enhancements/controls/Mouse.h"
+ #include "soh/OTRGlobals.h"
+ #include "soh/ResourceManagerHelpers.h"
++#include "soh/AndroidTouch/AndroidTouch.h"
+ 
+ s32 D_8012D280 = 1;
+ 
+@@ -317,6 +318,7 @@ void PadMgr_HandleRetraceMsg(PadMgr* padMgr) {
+     }
+     osRecvMesg(queue, NULL, OS_MESG_BLOCK);
+     osContGetReadData(padMgr->pads);
++    SohAndroid_InjectTouchPad(&padMgr->pads[0]); // on-screen controls (Android only)
+ 
+     Mouse_UpdateAll();
+ 

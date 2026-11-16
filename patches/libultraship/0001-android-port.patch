@@ -1,0 +1,37 @@
+diff --git a/src/fast/backends/gfx_opengl.cpp b/src/fast/backends/gfx_opengl.cpp
+index ad9b1dd..313cc38 100644
+--- a/src/fast/backends/gfx_opengl.cpp
++++ b/src/fast/backends/gfx_opengl.cpp
+@@ -288,7 +288,7 @@ std::string GfxRenderingAPIOGL::BuildFsShader(const CCFeatures& cc_features) {
+         { "texture", "texture" },
+         { "vOutColor", "vOutColor" },
+ #elif defined(USE_OPENGLES)
+-        { "GLSL_VERSION", "#version 300 es\nprecision mediump float;" },
++        { "GLSL_VERSION", "#version 300 es\nprecision highp float;" },
+         { "attr", "in" },
+         { "opengles", true },
+         { "core_opengl", false },
+diff --git a/src/ship/Context.cpp b/src/ship/Context.cpp
+index 28a211f..25ab184 100644
+--- a/src/ship/Context.cpp
++++ b/src/ship/Context.cpp
+@@ -482,7 +482,8 @@ std::string Context::GetShortName() const {
+ 
+ std::string Context::GetAppBundlePath() {
+ #if defined(__ANDROID__)
+-    const char* externaldir = SDL_AndroidGetExternalStoragePath();
++    const char* externaldir =
++        getenv("SOH_ANDROID_DATA_DIR") != NULL ? getenv("SOH_ANDROID_DATA_DIR") : SDL_AndroidGetExternalStoragePath();
+     if (externaldir != NULL) {
+         return externaldir;
+     }
+@@ -545,7 +546,8 @@ std::string Context::GetAppBundlePath() {
+ 
+ std::string Context::GetAppDirectoryPath(const std::string& appName) {
+ #if defined(__ANDROID__)
+-    const char* externaldir = SDL_AndroidGetExternalStoragePath();
++    const char* externaldir =
++        getenv("SOH_ANDROID_DATA_DIR") != NULL ? getenv("SOH_ANDROID_DATA_DIR") : SDL_AndroidGetExternalStoragePath();
+     if (externaldir != NULL) {
+         return externaldir;
+     }

@@ -15,11 +15,6 @@ on:
           - android
           - android-arm64
           - android-arm32
-      upstream_ref:
-        description: Ship of Harkinian commit to build on (leave empty for the tested one)
-        type: string
-        required: false
-        default: ""
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.platform }}
@@ -28,24 +23,14 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  # The Ship of Harkinian commit this port is developed and tested against.
-  UPSTREAM_REF: ${{ inputs.upstream_ref || 'd4bf6528a3bb242bc5d862e4f1ab2b6d385c157b' }}
-
-# Layout of the workspace in every job:
-#   .        Ship of Harkinian (the build tree, same as its own workflow)
-#   port/    this repository (patches, overlay, android app, scripts)
+# The build runs on this repository directly: it already contains Ship of Harkinian with the Android port applied.
 
 jobs:
   generate-soh-otr:
     runs-on: ubuntu-22.04
     steps:
-    - name: Checkout Ship of Harkinian
+    - name: Checkout
       uses: actions/checkout@v7
-      with:
-        repository: HarbourMasters/Shipwright
-        ref: ${{ env.UPSTREAM_REF }}
-        submodules: true
     - name: Configure ccache
       uses: hendrikmuhs/ccache-action@v1.2.23
       with:
@@ -80,18 +65,8 @@ jobs:
     needs: generate-soh-otr
     runs-on: ubuntu-22.04
     steps:
-    - name: Checkout Ship of Harkinian
+    - name: Checkout
       uses: actions/checkout@v7
-      with:
-        repository: HarbourMasters/Shipwright
-        ref: ${{ env.UPSTREAM_REF }}
-        submodules: true
-    - name: Checkout the port
-      uses: actions/checkout@v7
-      with:
-        path: port
-    - name: Apply the Android port
-      run: ./port/scripts/apply.sh .
     - name: Install dependencies
       run: |
         sudo apt-get update
@@ -193,19 +168,8 @@ jobs:
       run: |
         choco install ninja -y
         Remove-Item -Path "C:\ProgramData\Chocolatey\bin\ccache.exe" -Force -ErrorAction SilentlyContinue
-    - name: Checkout Ship of Harkinian
+    - name: Checkout
       uses: actions/checkout@v7
-      with:
-        repository: HarbourMasters/Shipwright
-        ref: ${{ env.UPSTREAM_REF }}
-        submodules: true
-    - name: Checkout the port
-      uses: actions/checkout@v7
-      with:
-        path: port
-    - name: Apply the Android port
-      shell: bash
-      run: ./port/scripts/apply.sh .
     - name: Configure ccache
       uses: hendrikmuhs/ccache-action@v1.2.23
       with:
@@ -275,15 +239,6 @@ jobs:
       API: 24
     steps:
     - uses: actions/checkout@v7
-      with:
-        repository: HarbourMasters/Shipwright
-        ref: ${{ env.UPSTREAM_REF }}
-        submodules: true
-    - uses: actions/checkout@v7
-      with:
-        path: port
-    - name: Apply the Android port
-      run: ./port/scripts/apply.sh .
     - name: Install tools
       run: |
         sudo apt-get update
@@ -403,14 +358,8 @@ jobs:
       run:
         shell: bash -eo pipefail {0}
     steps:
-    - name: Checkout Ship of Harkinian (extractor assets)
+    - name: Checkout
       uses: actions/checkout@v7
-      with:
-        repository: HarbourMasters/Shipwright
-        ref: ${{ env.UPSTREAM_REF }}
-    - uses: actions/checkout@v7
-      with:
-        path: port
     - uses: actions/setup-java@v4
       with:
         distribution: temurin
@@ -427,7 +376,7 @@ jobs:
         path: libs
     - name: Assemble the app
       run: |
-        APP=port/android/app/src/main
+        APP=android/app/src/main
         # SDL's Java side (must match the libSDL2.so version)
         curl -fsSL https://github.com/libsdl-org/SDL/releases/download/release-2.32.8/SDL2-2.32.8.tar.gz | tar xz
         mkdir -p $APP/java/org/libsdl/app
@@ -447,7 +396,7 @@ jobs:
         find $APP/jniLibs -name '*.so' -exec $STRIP --strip-unneeded {} +
         find $APP/jniLibs -type f -exec ls -l {} +
     - name: Build the APK
-      working-directory: port/android
+      working-directory: android
       run: |
         gradle --no-daemon wrapper --gradle-version 8.9
         ./gradlew --no-daemon assembleRelease
@@ -455,5 +404,5 @@ jobs:
       uses: actions/upload-artifact@v7
       with:
         name: ShipOfHarkinian-android
-        path: port/android/app/build/outputs/apk/release/*.apk
+        path: android/app/build/outputs/apk/release/*.apk
         retention-days: 14

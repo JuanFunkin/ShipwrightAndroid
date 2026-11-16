@@ -1,53 +1,46 @@
-# ShipwrightAndroid
+# Ship Of Harkinian By Harbour Masters For Android
 
-[Ship of Harkinian](https://github.com/HarbourMasters/Shipwright) by Harbour Masters, for Android.
+Vanilla [Ship of Harkinian](https://github.com/HarbourMasters/Shipwright) (Ocarina of Time PC port) with an **Android port** applied directly to the source in this repository: touch controls, an Android app, one APK for `arm64-v8a` + `armeabi-v7a`, and the fixes needed to run on ARM/GLES.
 
-This repository does not contain the game's source code. It holds a small set of patches and new files that are
-applied on top of the official Ship of Harkinian code by the build workflow, so the game stays up to date with
-upstream and every change made for Android is easy to read.
+The full source is here. Builds compile **this** tree; nothing is cloned or patched at build time, so upstream commits can never conflict with our changes.
 
-## What it adds
+Based on Shipwright `d4bf6528a3bb242bc5d862e4f1ab2b6d385c157b`, libultraship `da6daf1`, Torch `2ab12fe` (all vendored as plain directories).
 
-- **Android app** with a launcher: it asks for access to your files, lets you pick your Ocarina of Time ROM and
-  starts the game. One APK runs on 64-bit (arm64-v8a) and 32-bit (armeabi-v7a) phones.
-- **Game folder** at `/storage/emulated/0/com.shipofharkinian` with your settings, saves, mods and the extracted
-  `oot.o2r`, reachable from any file manager.
-- **On-screen controls**: stick, A, B, C buttons, Z, L, R and Start. A **MENU** button at the top opens the Ship of
-  Harkinian menu (the Esc key on a PC) and a **TOUCH** button opens the settings where every button can be moved,
-  resized and made more or less transparent.
-- **Touch friendly menus**: taps work as clicks, two fingers scroll, and the menu size can be changed.
-- Fixes needed to run on phones: OpenGL ES shaders, unsigned `char` on ARM, 32-bit mixer code.
-- A new ROM extraction writer that no longer fails on archives with more than 65535 files.
+## What differs from upstream
 
-On PC the patched game behaves exactly like Ship of Harkinian (the touch controls only exist on Android).
+| File | Change |
+|---|---|
+| `soh/soh/AndroidTouch/*` | New: on-screen touch controls, MENU/TOUCH buttons, touch settings window |
+| `soh/src/code/padmgr.c` | Injects touch input into the controller state (`SohAndroid_InjectTouchPad`) |
+| `soh/src/code/main.c` | On Android, `chdir` to the data folder |
+| `soh/soh/SohGui/SohGui.cpp` | Registers the touch window (`__ANDROID__` only) |
+| `soh/CMakeLists.txt` | `soh` is built as a shared library on Android |
+| `soh/include/functions.h`, `soh/soh/mixer.c` | Bionic/aarch64 compile fixes |
+| `soh/soh/Extractor/*` | Shows the Torch extraction error to the user |
+| `libultraship/src/ship/Context.cpp` | Data path from `SOH_ANDROID_DATA_DIR` |
+| `libultraship/.../gfx_opengl.cpp` | `highp` fragment precision (fixes garbled text on GLES) |
+| `torch/src/archive/ZWrapper.*` | Streaming ZIP64 writer (extraction no longer fails with large archives) |
+| `android/` | The Android app (launcher, activity, Gradle project) |
+| `.github/workflows/build.yml` | Windows, Linux and Android builds |
 
-## Layout
+Compare with upstream at the pinned commit to see the exact diff.
 
-| Folder | Contents |
-| --- | --- |
-| `patches/shipwright` | changes to the game code |
-| `patches/libultraship` | changes to libultraship (game folder, shader precision) |
-| `overlay` | new source files (the on-screen controls) |
-| `torch-overlay` | replacement O2R writer for Torch |
-| `android` | the Android app (launcher, permissions, SDL activity) |
-| `scripts/apply.sh` | applies everything to a Shipwright checkout |
+## Building
 
-## Builds
+Run the **Build Ship of Harkinian (Android port)** workflow from the Actions tab and choose a platform (`all`, `windows`, `linux`, `android`, `android-arm64`, `android-arm32`). Artifacts:
 
-Open the **Actions** tab, choose **Build Ship of Harkinian (Android port)** and press **Run workflow**. It can
-build Android (both architectures in one APK), Windows and Linux. The finished files appear as artifacts:
-`ShipOfHarkinian-android`, `ShipOfHarkinian-windows-x64` and `ShipOfHarkinian-linux-x86_64`.
+- `ShipOfHarkinian-android` – single APK (arm64-v8a + armeabi-v7a)
+- `ShipOfHarkinian-windows-x64`, `ShipOfHarkinian-linux-x86_64`
 
-## Using it on a phone
+## Using it on Android
 
 1. Install the APK and open it.
-2. Tap **Give file access** and allow access to all files.
-3. Tap **Select the ROM file** and pick your Ocarina of Time ROM.
-4. The first start extracts the ROM (this takes a few minutes), then the game opens.
+2. Grant the *all files access* permission (game data lives in `/storage/emulated/0/com.shipofharkinian`).
+3. Pick your Ocarina of Time ROM; the app extracts the assets and starts the game.
+4. In game: **MENU** opens the SoH menu, **TOUCH** opens the touch-controls settings.
 
-You need your own legally obtained ROM. No game files are included.
+You must provide your own legally obtained ROM.
 
 ## Credits
 
-Ship of Harkinian and libultraship are by [Harbour Masters](https://github.com/HarbourMasters). This repository only
-adds the Android port on top of them.
+All the credit for Ship of Harkinian goes to the [Harbour Masters](https://github.com/HarbourMasters) team and contributors (see `docs/CREDITS.md`). This repository only adds the Android port.

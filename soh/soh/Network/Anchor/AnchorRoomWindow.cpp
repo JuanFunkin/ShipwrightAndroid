@@ -22,11 +22,6 @@ void AnchorRoomWindow::Draw() {
 
     auto vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowViewport(vp->ID);
-#ifdef __ANDROID__
-    // On a phone the player list sits in the top-right corner, always on screen.
-    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x - 12.0f, vp->Pos.y + 12.0f), ImGuiCond_Always,
-                            ImVec2(1.0f, 0.0f));
-#endif
 
     ImGui::Begin("Anchor Room", nullptr,
                  ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing |

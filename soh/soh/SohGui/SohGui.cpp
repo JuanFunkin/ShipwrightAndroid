@@ -277,12 +277,6 @@ void SetupGuiElements() {
     gui->AddGuiWindow(mTimeDisplayWindow);
     mAnchorRoomWindow = std::make_shared<AnchorRoomWindow>(CVAR_WINDOW("AnchorRoom"), "Anchor Room");
     gui->AddGuiWindow(mAnchorRoomWindow);
-#ifdef __ANDROID__
-    // The connected-players list (and its teleport buttons) is shown by default on Android.
-    if (CVarGetInteger(CVAR_WINDOW("AnchorRoom"), -1) == -1) {
-        mAnchorRoomWindow->Show();
-    }
-#endif
 }
 
 void Destroy() {

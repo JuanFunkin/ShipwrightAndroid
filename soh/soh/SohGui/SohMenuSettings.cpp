@@ -6,6 +6,9 @@
 #include <soh/GameVersions.h>
 #include "soh/ResourceManagerHelpers.h"
 #include "UIWidgets.hpp"
+#ifdef __ANDROID__
+#include "soh/AndroidTouch/AndroidTouch.h"
+#endif
 #include <ship/controller/controldeck/ControlDeck.h>
 #include <ship/Context.h>
 
@@ -458,6 +461,16 @@ void SohMenu::AddMenuSettings() {
         .WindowName("Configure Controller")
         .HideInSearch(true)
         .Options(WindowButtonOptions().Tooltip("Enables the separate Bindings Window."));
+
+#ifdef __ANDROID__
+    // Touch controls (phones)
+    path.sidebarName = "Touch Controls";
+    path.column = SECTION_COLUMN_1;
+    AddSidebarEntry("Settings", path.sidebarName, 1);
+    AddWidget(path, "Touch Controls", WIDGET_CUSTOM)
+        .CustomFunction([](WidgetInfo& info) { SohAndroid::DrawTouchTab(); })
+        .HideInSearch(true);
+#endif
 
     // Input Viewer
     path.sidebarName = "Input Viewer";

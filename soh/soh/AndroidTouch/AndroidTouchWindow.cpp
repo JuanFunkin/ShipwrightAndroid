@@ -23,5 +23,4 @@ void AndroidTouchWindow::Draw() {
     }
     SohAndroid::HandleBackButton();
     SohAndroid::DrawTouchOverlay();
-    SohAndroid::DrawTouchSettings();
 }

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <ship/window/gui/IconsFontAwesome4.h>
 
 #include "Anchor.h"
@@ -21,6 +22,11 @@ void AnchorRoomWindow::Draw() {
 
     auto vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowViewport(vp->ID);
+#ifdef __ANDROID__
+    // On a phone the player list sits in the top-right corner, always on screen.
+    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x - 12.0f, vp->Pos.y + 12.0f), ImGuiCond_Always,
+                            ImVec2(1.0f, 0.0f));
+#endif
 
     ImGui::Begin("Anchor Room", nullptr,
                  ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing |
@@ -95,7 +101,9 @@ void AnchorRoomWindow::DrawElement() {
             if (Anchor::Instance->CanTeleportTo(client.clientId)) {
                 ImGui::SameLine();
                 ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
-                if (ImGui::Button(ICON_FA_LOCATION_ARROW, ImVec2(20.0f, 20.0f))) {
+                if (ImGui::Button(ICON_FA_LOCATION_ARROW,
+                                 ImVec2(std::max(20.0f, ImGui::GetFontSize() * 1.6f),
+                                        std::max(20.0f, ImGui::GetFontSize() * 1.6f)))) {
                     Anchor::Instance->SendPacket_RequestTeleport(client.clientId);
                 }
                 ImGui::PopStyleVar();

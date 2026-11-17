@@ -147,7 +147,7 @@ public class LauncherActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT));
 
         ImageView logo = new ImageView(this);
-        logo.setImageResource(R.drawable.ic_foreground);
+        logo.setImageResource(R.mipmap.ic_launcher);
         logo.setBackground(rounded(Color.rgb(27, 58, 42), dp(24)));
         logo.setClipToOutline(true);
         outer.addView(logo, new LinearLayout.LayoutParams(dp(72), dp(72)));

@@ -14,7 +14,8 @@
 
     <application
         android:label="Ship of Harkinian"
-        android:icon="@drawable/ic_foreground"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:allowBackup="true"
         android:hasFragileUserData="true"
         android:requestLegacyExternalStorage="true"

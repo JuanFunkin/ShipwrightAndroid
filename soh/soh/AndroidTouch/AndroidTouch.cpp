@@ -2,11 +2,11 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cfloat>
 #include <cmath>
 #include <cstdlib>
 #include <map>
 #include <mutex>
-#include <set>
 #include <string>
 #include <vector>
 
@@ -27,58 +27,74 @@ extern "C" {
  *
  * The overlay draws the buttons and reads the fingers directly from SDL (so several can be used at once). The
  * result is written straight into the game's controller data (SohAndroid_InjectTouchPad, called by padmgr.c
- * every frame), so it works without any gamepad being detected. Two small buttons at the top open the SoH menu
- * (Esc on a PC) and the touch settings, where every control can be moved and resized.
+ * every frame), so it works without any gamepad being detected.
+ *
+ *  - The stick is floating: it appears where the left thumb lands and follows it, so it is never out of reach.
+ *  - The MENU button opens the SoH menu (the phone's back button does the same). It hides while the menu is open.
+ *  - Every control (MENU included) can be moved, resized and given its own opacity: SoH menu > Settings >
+ *    Touch Controls > Edit layout.
  *
  * It is on by default on Android. On other systems set SOH_TOUCH=1 to try it.
  */
 
 namespace {
 
-enum Kind { kStick, kButton };
+enum Kind { kStick, kRound, kArrow, kPill };
+enum Dir { kUp, kDown, kLeft, kRight };
 
 // N64 controller bits as the game reads them (same values as A_BUTTON, B_BUTTON, ... in libultra).
 constexpr uint16_t kBtnA = 0x8000, kBtnB = 0x4000, kBtnZ = 0x2000, kBtnStart = 0x1000, kBtnL = 0x0020,
                    kBtnR = 0x0010, kBtnCUp = 0x0008, kBtnCDown = 0x0004, kBtnCLeft = 0x0002, kBtnCRight = 0x0001;
 
 struct Control {
-    const char* id;       // used in the saved settings
+    const char* id;    // used in the saved settings
     const char* label;
     Kind kind;
-    float x, y;           // default center, fraction of the screen
-    float r;              // default radius, fraction of the screen height
-    uint16_t bit;         // N64 button bit (buttons only)
+    float x, y;        // default center, fraction of the screen
+    float r;           // default size, fraction of the screen height
+    uint16_t bit;      // N64 button bit (0 = none)
     ImU32 color;
+    Dir dir;           // arrows only
+    float wide;        // pills only: half width in units of r
 };
 
 Control sControls[] = {
-    { "stick", "", kStick, 0.15f, 0.70f, 0.17f, 0, IM_COL32(220, 220, 230, 255) },
-    { "a", "A", kButton, 0.90f, 0.76f, 0.085f, kBtnA, IM_COL32(80, 200, 120, 255) },
-    { "b", "B", kButton, 0.80f, 0.86f, 0.07f, kBtnB, IM_COL32(230, 90, 80, 255) },
-    { "cup", "C^", kButton, 0.86f, 0.28f, 0.055f, kBtnCUp, IM_COL32(240, 200, 60, 255) },
-    { "cdown", "Cv", kButton, 0.86f, 0.50f, 0.055f, kBtnCDown, IM_COL32(240, 200, 60, 255) },
-    { "cleft", "C<", kButton, 0.78f, 0.39f, 0.055f, kBtnCLeft, IM_COL32(240, 200, 60, 255) },
-    { "cright", "C>", kButton, 0.94f, 0.39f, 0.055f, kBtnCRight, IM_COL32(240, 200, 60, 255) },
-    { "z", "Z", kButton, 0.08f, 0.36f, 0.065f, kBtnZ, IM_COL32(170, 170, 200, 255) },
-    { "l", "L", kButton, 0.08f, 0.20f, 0.055f, kBtnL, IM_COL32(170, 170, 200, 255) },
-    { "r", "R", kButton, 0.92f, 0.12f, 0.06f, kBtnR, IM_COL32(170, 170, 200, 255) },
-    { "start", "START", kButton, 0.50f, 0.92f, 0.05f, kBtnStart, IM_COL32(200, 200, 200, 255) },
+    { "stick", "Stick", kStick, 0.14f, 0.68f, 0.15f, 0, IM_COL32(255, 255, 255, 255), kUp, 0 },
+    { "a", "A", kRound, 0.91f, 0.73f, 0.090f, kBtnA, IM_COL32(60, 210, 120, 255), kUp, 0 },
+    { "b", "B", kRound, 0.80f, 0.85f, 0.068f, kBtnB, IM_COL32(240, 90, 80, 255), kUp, 0 },
+    { "cup", "C Up", kArrow, 0.87f, 0.26f, 0.050f, kBtnCUp, IM_COL32(245, 205, 70, 255), kUp, 0 },
+    { "cdown", "C Down", kArrow, 0.87f, 0.46f, 0.050f, kBtnCDown, IM_COL32(245, 205, 70, 255), kDown, 0 },
+    { "cleft", "C Left", kArrow, 0.80f, 0.36f, 0.050f, kBtnCLeft, IM_COL32(245, 205, 70, 255), kLeft, 0 },
+    { "cright", "C Right", kArrow, 0.94f, 0.36f, 0.050f, kBtnCRight, IM_COL32(245, 205, 70, 255), kRight, 0 },
+    { "z", "Z", kPill, 0.09f, 0.30f, 0.050f, kBtnZ, IM_COL32(170, 180, 255, 255), kUp, 1.5f },
+    { "l", "L", kPill, 0.09f, 0.14f, 0.045f, kBtnL, IM_COL32(170, 180, 255, 255), kUp, 1.5f },
+    { "r", "R", kPill, 0.91f, 0.10f, 0.050f, kBtnR, IM_COL32(170, 180, 255, 255), kUp, 1.5f },
+    { "start", "START", kPill, 0.50f, 0.93f, 0.040f, kBtnStart, IM_COL32(230, 230, 240, 255), kUp, 2.0f },
+    { "menu", "MENU", kPill, 0.50f, 0.065f, 0.040f, 0, IM_COL32(255, 255, 255, 255), kUp, 2.1f },
 };
 constexpr int kControlCount = sizeof(sControls) / sizeof(sControls[0]);
+constexpr int kStickIndex = 0;
+constexpr int kMenuIndex = kControlCount - 1;
 
 std::mutex sFingerMutex;
-std::map<SDL_FingerID, ImVec2> sFingers; // normalized 0..1
+std::map<SDL_FingerID, ImVec2> sFingers; // current position, normalized 0..1
+std::map<SDL_FingerID, ImVec2> sStarts;  // where each finger first touched, normalized
 // What the game reads this frame (written by the overlay, read by padmgr.c).
 std::atomic<uint16_t> sPadButtons{ 0 };
 std::atomic<int> sPadStickX{ 0 };
 std::atomic<int> sPadStickY{ 0 };
+std::atomic<bool> sBackPressed{ false };
 bool sWatching = false;
-bool sOpen = false;     // the settings window
 bool sEdit = false;
-int sDragging = -1;
-SDL_FingerID sStickFinger = -1;
+int sSelected = 1;
+SDL_FingerID sDragFinger = -1;
+ImVec2 sDragOffset(0, 0);
+bool sDragging = false;
 float sScrollPrevY = -1.0f;
 bool sStickActive = false;
+SDL_FingerID sStickFinger = -1;
+ImVec2 sStickBase(0, 0); // pixels
+bool sMenuWasDown = false;
 
 std::string Key(const Control& c, const char* field) {
     return std::string("gAndroid.Touch.") + c.id + "." + field;
@@ -86,9 +102,11 @@ std::string Key(const Control& c, const char* field) {
 
 float PosX(const Control& c) { return CVarGetFloat(Key(c, "X").c_str(), c.x); }
 float PosY(const Control& c) { return CVarGetFloat(Key(c, "Y").c_str(), c.y); }
+float CtrlSize(const Control& c) { return CVarGetFloat(Key(c, "R").c_str(), c.r); }
+float CtrlOpacity(const Control& c) { return CVarGetFloat(Key(c, "O").c_str(), 1.0f); }
 
 float Scale() { return CVarGetFloat("gAndroid.Touch.Scale", 1.0f); }
-float Opacity() { return CVarGetFloat("gAndroid.Touch.Opacity", 0.55f); }
+float Opacity() { return CVarGetFloat("gAndroid.Touch.Opacity", 0.6f); }
 
 bool Enabled() {
 #ifdef __ANDROID__
@@ -98,31 +116,38 @@ bool Enabled() {
 #endif
 }
 
+bool FloatingStick() { return CVarGetInteger("gAndroid.Touch.FloatingStick", 1) != 0; }
+bool ShowMenuButton() { return CVarGetInteger("gAndroid.Touch.ShowMenuButton", 1) != 0; }
+
 bool SohMenuVisible() {
     auto gui = Ship::Context::GetRawInstance()->GetWindow()->GetGui();
     return gui != nullptr && gui->GetMenu() != nullptr && gui->GetMenu()->IsVisible();
 }
 
 // The SoH menu is a GuiWindow: it has to be toggled through the window, changing its saved flag does nothing.
-void ToggleSohMenu() {
+void SetSohMenuVisible(bool visible) {
     auto gui = Ship::Context::GetRawInstance()->GetWindow()->GetGui();
-    if (gui != nullptr && gui->GetMenu() != nullptr) {
+    if (gui != nullptr && gui->GetMenu() != nullptr && gui->GetMenu()->IsVisible() != visible) {
         gui->GetMenu()->ToggleVisibility();
     }
 }
 
 int EventWatch(void*, SDL_Event* event) {
-    if (event->type == SDL_FINGERDOWN || event->type == SDL_FINGERMOTION) {
+    if (event->type == SDL_FINGERDOWN) {
+        std::lock_guard<std::mutex> lock(sFingerMutex);
+        const ImVec2 p(event->tfinger.x, event->tfinger.y);
+        sFingers[event->tfinger.fingerId] = p;
+        sStarts[event->tfinger.fingerId] = p;
+    } else if (event->type == SDL_FINGERMOTION) {
         std::lock_guard<std::mutex> lock(sFingerMutex);
         sFingers[event->tfinger.fingerId] = ImVec2(event->tfinger.x, event->tfinger.y);
     } else if (event->type == SDL_FINGERUP) {
         std::lock_guard<std::mutex> lock(sFingerMutex);
         sFingers.erase(event->tfinger.fingerId);
+        sStarts.erase(event->tfinger.fingerId);
     }
     return 0;
 }
-
-std::atomic<bool> sBackPressed{ false };
 
 void EnsureWatch() {
     if (!sWatching) {
@@ -131,30 +156,161 @@ void EnsureWatch() {
     }
 }
 
+struct Finger {
+    SDL_FingerID id;
+    ImVec2 pos;   // pixels
+    ImVec2 start; // pixels
+};
+
 // Screen geometry of a control, in pixels.
 struct Geo {
     ImVec2 center;
-    float radius;
+    float size;     // radius for round controls, half height for pills
+    float halfW;    // half width (pills) or radius
 };
 
 Geo Place(const Control& c, ImVec2 screen) {
-    return { ImVec2(PosX(c) * screen.x, PosY(c) * screen.y), CVarGetFloat(Key(c, "R").c_str(), c.r) * Scale() * screen.y };
+    const float s = CtrlSize(c) * Scale() * screen.y;
+    return { ImVec2(PosX(c) * screen.x, PosY(c) * screen.y), s, c.kind == kPill ? s * c.wide : s };
 }
 
 float Dist(ImVec2 a, ImVec2 b) {
     return std::sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y));
 }
 
+// Is the point on the control? "grow" makes the target a little bigger than what is drawn (fingers are fat).
+bool Hit(const Control& c, const Geo& g, ImVec2 p, float grow) {
+    if (c.kind == kPill) {
+        const float hh = g.size * 0.85f * grow;
+        return std::fabs(p.x - g.center.x) <= g.halfW * grow && std::fabs(p.y - g.center.y) <= hh;
+    }
+    return Dist(p, g.center) <= g.size * grow;
+}
+
+ImU32 WithAlpha(ImU32 color, float alpha) {
+    const int a = std::clamp(static_cast<int>(alpha * 255.0f), 0, 255);
+    return (color & 0x00FFFFFF) | (static_cast<ImU32>(a) << 24);
+}
+
+void CenteredText(ImDrawList* draw, ImVec2 center, float fontSize, ImU32 color, const char* text) {
+    ImFont* font = ImGui::GetFont();
+    const ImVec2 size = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, text);
+    draw->AddText(font, fontSize, ImVec2(center.x - size.x * 0.5f, center.y - size.y * 0.5f), color, text);
+}
+
+void DrawArrow(ImDrawList* draw, ImVec2 c, float r, Dir dir, ImU32 color) {
+    const float k = r * 0.5f;
+    ImVec2 a, b, d;
+    switch (dir) {
+        case kUp: a = ImVec2(c.x, c.y - k); b = ImVec2(c.x - k, c.y + k * 0.7f); d = ImVec2(c.x + k, c.y + k * 0.7f); break;
+        case kDown: a = ImVec2(c.x, c.y + k); b = ImVec2(c.x + k, c.y - k * 0.7f); d = ImVec2(c.x - k, c.y - k * 0.7f); break;
+        case kLeft: a = ImVec2(c.x - k, c.y); b = ImVec2(c.x + k * 0.7f, c.y + k); d = ImVec2(c.x + k * 0.7f, c.y - k); break;
+        default: a = ImVec2(c.x + k, c.y); b = ImVec2(c.x - k * 0.7f, c.y - k); d = ImVec2(c.x - k * 0.7f, c.y + k); break;
+    }
+    draw->AddTriangleFilled(a, b, d, color);
+}
+
+// Flat, translucent style: dark glass with a coloured rim; it lights up while pressed.
+void DrawControl(ImDrawList* draw, const Control& c, const Geo& g, bool pressed, float alpha, bool highlight) {
+    const float rim = std::max(2.0f, g.size * 0.07f);
+    const ImU32 glass = IM_COL32(12, 14, 24, 255);
+    const ImU32 fill = pressed ? WithAlpha(c.color, 0.85f * alpha) : WithAlpha(glass, 0.55f * alpha);
+    const ImU32 ring = WithAlpha(c.color, (pressed ? 1.0f : 0.85f) * alpha);
+    const ImU32 text = pressed ? WithAlpha(IM_COL32(10, 10, 20, 255), alpha) : WithAlpha(IM_COL32(255, 255, 255, 255), alpha);
+
+    if (c.kind == kPill) {
+        const float hh = g.size * 0.85f;
+        const ImVec2 mn(g.center.x - g.halfW, g.center.y - hh), mx(g.center.x + g.halfW, g.center.y + hh);
+        draw->AddRectFilled(mn, mx, fill, hh);
+        draw->AddRect(mn, mx, ring, hh, 0, rim);
+        if (highlight) {
+            draw->AddRect(ImVec2(mn.x - 5, mn.y - 5), ImVec2(mx.x + 5, mx.y + 5), IM_COL32(255, 255, 255, 230), hh + 5, 0, 3.0f);
+        }
+        CenteredText(draw, g.center, g.size * 0.85f, text, c.label);
+        return;
+    }
+    const float radius = pressed ? g.size * 0.93f : g.size;
+    draw->AddCircleFilled(g.center, radius, fill, 48);
+    draw->AddCircle(g.center, radius, ring, 48, rim);
+    if (highlight) {
+        draw->AddCircle(g.center, radius + 6.0f, IM_COL32(255, 255, 255, 230), 48, 3.0f);
+    }
+    if (c.kind == kArrow) {
+        DrawArrow(draw, g.center, radius, c.dir, pressed ? text : ring);
+    } else {
+        CenteredText(draw, g.center, radius * 1.05f, text, c.label);
+    }
+}
+
+void DrawStick(ImDrawList* draw, ImVec2 base, ImVec2 knob, float radius, float alpha, bool active, bool highlight) {
+    const float a = active ? alpha : alpha * 0.55f;
+    draw->AddCircleFilled(base, radius, WithAlpha(IM_COL32(255, 255, 255, 255), 0.10f * a), 64);
+    draw->AddCircle(base, radius, WithAlpha(IM_COL32(255, 255, 255, 255), 0.55f * a), 64, std::max(2.0f, radius * 0.03f));
+    draw->AddCircle(base, radius * 0.55f, WithAlpha(IM_COL32(255, 255, 255, 255), 0.18f * a), 48, 1.5f);
+    // Four small direction marks.
+    const float m = radius * 0.80f, t = radius * 0.08f;
+    const ImU32 mark = WithAlpha(IM_COL32(255, 255, 255, 255), 0.45f * a);
+    draw->AddTriangleFilled(ImVec2(base.x, base.y - m - t), ImVec2(base.x - t, base.y - m + t), ImVec2(base.x + t, base.y - m + t), mark);
+    draw->AddTriangleFilled(ImVec2(base.x, base.y + m + t), ImVec2(base.x + t, base.y + m - t), ImVec2(base.x - t, base.y + m - t), mark);
+    draw->AddTriangleFilled(ImVec2(base.x - m - t, base.y), ImVec2(base.x - m + t, base.y + t), ImVec2(base.x - m + t, base.y - t), mark);
+    draw->AddTriangleFilled(ImVec2(base.x + m + t, base.y), ImVec2(base.x + m - t, base.y - t), ImVec2(base.x + m - t, base.y + t), mark);
+    // The knob.
+    draw->AddCircleFilled(knob, radius * 0.38f, WithAlpha(IM_COL32(235, 240, 255, 255), (active ? 0.65f : 0.35f) * alpha), 48);
+    draw->AddCircle(knob, radius * 0.38f, WithAlpha(IM_COL32(255, 255, 255, 255), 0.9f * a), 48, std::max(2.0f, radius * 0.03f));
+    if (highlight) {
+        draw->AddCircle(base, radius + 6.0f, IM_COL32(255, 255, 255, 230), 64, 3.0f);
+    }
+}
+
 } // namespace
 
 namespace SohAndroid {
 
-// Every frame: reads the fingers, updates the virtual gamepad and draws the controls.
 // Android's back button (the triangle / back gesture) opens and closes the SoH menu.
 void HandleBackButton() {
     if (sBackPressed.exchange(false)) {
-        ToggleSohMenu();
+        if (sEdit) {
+            sEdit = false;
+            SetSohMenuVisible(true);
+        } else {
+            SetSohMenuVisible(!SohMenuVisible());
+        }
     }
+}
+
+static void DrawEditPanel(ImVec2 screen) {
+    Control& c = sControls[sSelected];
+    ImGui::SetNextWindowPos(ImVec2(screen.x * 0.5f, screen.y - 10.0f), ImGuiCond_Always, ImVec2(0.5f, 1.0f));
+    ImGui::SetNextWindowSize(ImVec2(screen.x * 0.46f, 0), ImGuiCond_Always);
+    ImGui::Begin("Edit touch layout", nullptr,
+                 ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                     ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize);
+    ImGui::TextWrapped("Drag a control to move it. Selected: %s", c.label[0] != '\0' ? c.label : c.id);
+    float r = CtrlSize(c);
+    const float lo = c.kind == kStick ? 0.06f : 0.02f, hi = c.kind == kStick ? 0.30f : 0.16f;
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::SliderFloat("##size", &r, lo, hi, "Size %.3f")) {
+        CVarSetFloat(Key(c, "R").c_str(), r);
+    }
+    float o = CtrlOpacity(c);
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::SliderFloat("##op", &o, 0.1f, 1.0f, "Opacity %.2f")) {
+        CVarSetFloat(Key(c, "O").c_str(), o);
+    }
+    if (ImGui::Button("Reset this")) {
+        CVarClear(Key(c, "X").c_str());
+        CVarClear(Key(c, "Y").c_str());
+        CVarClear(Key(c, "R").c_str());
+        CVarClear(Key(c, "O").c_str());
+        CVarSave();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Done")) {
+        sEdit = false;
+        CVarSave();
+        SetSohMenuVisible(true);
+    }
+    ImGui::End();
 }
 
 void DrawTouchOverlay() {
@@ -165,194 +321,232 @@ void DrawTouchOverlay() {
 
     const ImVec2 screen = ImGui::GetIO().DisplaySize;
     ImDrawList* draw = ImGui::GetForegroundDrawList();
-    const float alpha = Opacity();
     ImGuiIO& io = ImGui::GetIO();
+    const float alpha = Opacity();
 
-    // The SoH menu is open: the on-screen controller steps aside so taps on the menu never press game buttons.
-    const bool menuOpen = SohMenuVisible();
-    bool hide = (menuOpen || sOpen) && !sEdit;
-
-    // Two small buttons at the top centre: the SoH menu and the touch settings. They are hidden while the SoH menu is
-    // open so they never cover it (the phone's back button closes the menu).
-    if (!menuOpen) {
-        const float h = screen.y * 0.075f;
-        const float w = h * 2.3f;
-        const ImVec2 menuMin(screen.x * 0.5f - w - 6.0f, 6.0f), settingsMin(screen.x * 0.5f + 6.0f, 6.0f);
-        const struct { ImVec2 min; const char* label; } buttons[2] = { { menuMin, "MENU" }, { settingsMin, "TOUCH" } };
-        static bool sWasDown[2] = { false, false };
-        for (int i = 0; i < 2; i++) {
-            const ImVec2 max(buttons[i].min.x + w, buttons[i].min.y + h);
-            bool down = false;
-            {
-                std::lock_guard<std::mutex> lock(sFingerMutex);
-                for (const auto& entry : sFingers) {
-                    const float px = entry.second.x * screen.x, py = entry.second.y * screen.y;
-                    if (px >= buttons[i].min.x && px <= max.x && py >= buttons[i].min.y && py <= max.y) {
-                        down = true;
-                    }
-                }
-            }
-            if (down && !sWasDown[i]) {
-                if (i == 0) {
-                    ToggleSohMenu();
-                } else {
-                    sOpen = !sOpen;
-                }
-            }
-            sWasDown[i] = down;
-            draw->AddRectFilled(buttons[i].min, max, IM_COL32(20, 20, 30, down ? 220 : 140), h * 0.3f);
-            draw->AddRect(buttons[i].min, max, IM_COL32(255, 255, 255, 170), h * 0.3f, 0, 2.0f);
-            const ImVec2 size = ImGui::CalcTextSize(buttons[i].label);
-            draw->AddText(ImVec2(buttons[i].min.x + (w - size.x) * 0.5f, buttons[i].min.y + (h - size.y) * 0.5f),
-                          IM_COL32(255, 255, 255, 230), buttons[i].label);
-        }
-    }
-
-    std::vector<ImVec2> fingers; // pixels
+    std::vector<Finger> fingers;
     {
         std::lock_guard<std::mutex> lock(sFingerMutex);
         for (const auto& entry : sFingers) {
-            fingers.emplace_back(entry.second.x * screen.x, entry.second.y * screen.y);
+            ImVec2 start = entry.second;
+            auto it = sStarts.find(entry.first);
+            if (it != sStarts.end()) {
+                start = it->second;
+            }
+            fingers.push_back({ entry.first, ImVec2(entry.second.x * screen.x, entry.second.y * screen.y),
+                                ImVec2(start.x * screen.x, start.y * screen.y) });
         }
     }
 
-    // SoH menu open: two fingers dragging scroll it (one finger is the mouse: it presses and drags widgets).
-    if (menuOpen && fingers.size() >= 2) {
-        const float avgY = (fingers[0].y + fingers[1].y) * 0.5f;
-        if (sScrollPrevY >= 0.0f) {
-            io.AddMouseWheelEvent(0.0f, (avgY - sScrollPrevY) / (5.0f * ImGui::GetFontSize()));
-        }
-        sScrollPrevY = avgY;
-    } else {
-        sScrollPrevY = -1.0f;
-    }
+    const bool menuOpen = SohMenuVisible();
 
-    // Layout editing: drag controls with the mouse / one finger (SDL turns touches into mouse events).
+    // ---- layout editing: the controls are shown and dragged with a finger -------------------------------------
     if (sEdit) {
-        if (ImGui::IsMouseClicked(0)) {
-            sDragging = -1;
-            for (int i = 0; i < kControlCount; i++) {
-                const Geo g = Place(sControls[i], screen);
-                if (Dist(io.MousePos, g.center) <= g.radius) {
-                    sDragging = i;
+        sPadButtons = 0;
+        sPadStickX = 0;
+        sPadStickY = 0;
+        sStickActive = false;
+        draw->AddRectFilled(ImVec2(0, 0), screen, IM_COL32(0, 0, 0, 90));
+        for (int i = 0; i < kControlCount; i++) {
+            const Control& c = sControls[i];
+            const Geo g = Place(c, screen);
+            const float a = std::max(alpha, 0.5f) * CtrlOpacity(c);
+            if (c.kind == kStick) {
+                DrawStick(draw, g.center, g.center, g.size, a, false, i == sSelected);
+            } else {
+                DrawControl(draw, c, g, false, a, i == sSelected);
+            }
+        }
+
+        // Is the dragging finger still down?
+        bool found = false;
+        for (const Finger& f : fingers) {
+            if (f.id == sDragFinger) {
+                found = true;
+                if (sDragging) {
+                    CVarSetFloat(Key(sControls[sSelected], "X").c_str(), std::clamp((f.pos.x + sDragOffset.x) / screen.x, 0.0f, 1.0f));
+                    CVarSetFloat(Key(sControls[sSelected], "Y").c_str(), std::clamp((f.pos.y + sDragOffset.y) / screen.y, 0.0f, 1.0f));
                 }
             }
         }
-        if (sDragging >= 0 && ImGui::IsMouseDown(0)) {
-            CVarSetFloat(Key(sControls[sDragging], "X").c_str(), std::clamp(io.MousePos.x / screen.x, 0.0f, 1.0f));
-            CVarSetFloat(Key(sControls[sDragging], "Y").c_str(), std::clamp(io.MousePos.y / screen.y, 0.0f, 1.0f));
-        } else if (sDragging >= 0) {
-            sDragging = -1;
-            CVarSave();
-        }
-    }
-
-    float stickX = 0.0f, stickY = 0.0f;
-    float cX = 0.0f, cY = 0.0f;
-    uint16_t bits = 0;
-
-    for (int i = 0; i < kControlCount; i++) {
-        const Control& c = sControls[i];
-        const Geo g = Place(c, screen);
-        bool pressed = false;
-
-        if (!sEdit && !hide) {
-            if (c.kind == kStick) {
-                // The finger that lands inside the stick area keeps the stick until it is lifted.
-                std::lock_guard<std::mutex> lock(sFingerMutex);
-                if (sStickActive && sFingers.find(sStickFinger) == sFingers.end()) {
-                    sStickActive = false;
-                }
-                if (!sStickActive) {
-                    for (const auto& entry : sFingers) {
-                        const ImVec2 p(entry.second.x * screen.x, entry.second.y * screen.y);
-                        if (Dist(p, g.center) <= g.radius * 1.5f) {
-                            sStickActive = true;
-                            sStickFinger = entry.first;
-                            break;
+        if (!found) {
+            if (sDragging) {
+                CVarSave();
+            }
+            sDragging = false;
+            sDragFinger = -1;
+            if (!io.WantCaptureMouse) {
+                for (const Finger& f : fingers) {
+                    for (int i = kControlCount - 1; i >= 0 && !sDragging; i--) {
+                        const Geo g = Place(sControls[i], screen);
+                        if (Hit(sControls[i], g, f.start, 1.2f)) {
+                            sSelected = i;
+                            sDragging = true;
+                            sDragFinger = f.id;
+                            sDragOffset = ImVec2(g.center.x - f.pos.x, g.center.y - f.pos.y);
                         }
                     }
-                }
-                if (sStickActive) {
-                    const ImVec2 f = sFingers[sStickFinger];
-                    const ImVec2 p(f.x * screen.x, f.y * screen.y);
-                    stickX = std::clamp((p.x - g.center.x) / g.radius, -1.0f, 1.0f);
-                    stickY = std::clamp((p.y - g.center.y) / g.radius, -1.0f, 1.0f);
-                    pressed = true;
-                }
-            } else {
-                for (const ImVec2& f : fingers) {
-                    if (Dist(f, g.center) <= g.radius * 1.15f) {
-                        pressed = true;
+                    if (sDragging) {
+                        break;
                     }
                 }
             }
         }
+        DrawEditPanel(screen);
+        return;
+    }
 
-        if (pressed && c.kind == kButton) {
-            bits |= c.bit;
+    // ---- the SoH menu is open: no controls on screen; two fingers dragging scroll the menu ----------------------
+    if (menuOpen) {
+        sPadButtons = 0;
+        sPadStickX = 0;
+        sPadStickY = 0;
+        sStickActive = false;
+        sMenuWasDown = true; // a finger still resting on the MENU button must not toggle again
+        if (fingers.size() >= 2) {
+            const float avgY = (fingers[0].pos.y + fingers[1].pos.y) * 0.5f;
+            if (sScrollPrevY >= 0.0f) {
+                io.AddMouseWheelEvent(0.0f, (avgY - sScrollPrevY) / (5.0f * ImGui::GetFontSize()));
+            }
+            sScrollPrevY = avgY;
+        } else {
+            sScrollPrevY = -1.0f;
         }
+        return;
+    }
+    sScrollPrevY = -1.0f;
 
-        if (hide && !sEdit) {
+    // ---- normal play --------------------------------------------------------------------------------------------
+    float stickX = 0.0f, stickY = 0.0f;
+    uint16_t bits = 0;
+
+    // The stick.
+    {
+        const Control& sc = sControls[kStickIndex];
+        const Geo g = Place(sc, screen);
+        if (sStickActive) {
+            bool still = false;
+            for (const Finger& f : fingers) {
+                still = still || f.id == sStickFinger;
+            }
+            sStickActive = still;
+        }
+        if (!sStickActive) {
+            for (const Finger& f : fingers) {
+                // A finger claims the stick if it first touched on the left side of the screen (floating) or
+                // on the stick itself (fixed), and not on another control.
+                bool onOther = false;
+                for (int i = 1; i < kControlCount; i++) {
+                    if (Hit(sControls[i], Place(sControls[i], screen), f.start, 1.15f)) {
+                        onOther = true;
+                    }
+                }
+                const bool inZone = FloatingStick() ? (f.start.x < screen.x * 0.45f && f.start.y > screen.y * 0.18f)
+                                                    : Dist(f.start, g.center) <= g.size * 1.5f;
+                if (inZone && !onOther) {
+                    sStickActive = true;
+                    sStickFinger = f.id;
+                    if (FloatingStick()) {
+                        sStickBase = ImVec2(std::clamp(f.start.x, g.size, screen.x - g.size),
+                                            std::clamp(f.start.y, g.size, screen.y - g.size));
+                    } else {
+                        sStickBase = g.center;
+                    }
+                    break;
+                }
+            }
+        }
+        ImVec2 knob = g.center;
+        if (sStickActive) {
+            for (const Finger& f : fingers) {
+                if (f.id != sStickFinger) {
+                    continue;
+                }
+                float dx = f.pos.x - sStickBase.x, dy = f.pos.y - sStickBase.y;
+                float d = std::sqrt(dx * dx + dy * dy);
+                if (d > g.size && FloatingStick()) {
+                    // Dragged past the edge: the base follows the thumb, so the stick never runs out of reach.
+                    const float over = d - g.size;
+                    sStickBase.x += dx / d * over;
+                    sStickBase.y += dy / d * over;
+                    dx = f.pos.x - sStickBase.x;
+                    dy = f.pos.y - sStickBase.y;
+                    d = g.size;
+                }
+                stickX = std::clamp(dx / g.size, -1.0f, 1.0f);
+                stickY = std::clamp(dy / g.size, -1.0f, 1.0f);
+                knob = ImVec2(sStickBase.x + std::clamp(dx, -g.size, g.size), sStickBase.y + std::clamp(dy, -g.size, g.size));
+            }
+        }
+        DrawStick(draw, sStickActive ? sStickBase : g.center, sStickActive ? knob : g.center, g.size,
+                  alpha * CtrlOpacity(sc), sStickActive, false);
+    }
+
+    // Buttons.
+    for (int i = 1; i < kControlCount; i++) {
+        const Control& c = sControls[i];
+        if (i == kMenuIndex && !ShowMenuButton()) {
             continue;
         }
-        const int a = static_cast<int>(255.0f * alpha * (pressed ? 1.0f : 0.8f));
-        const ImU32 base = (c.color & 0x00FFFFFF) | (static_cast<ImU32>(a) << 24);
-        if (c.kind == kStick) {
-            draw->AddCircle(g.center, g.radius, base, 48, 3.0f);
-            ImVec2 knob = g.center;
-            if (sStickActive) {
-                knob = ImVec2(g.center.x + stickX * g.radius, g.center.y + stickY * g.radius);
+        const Geo g = Place(c, screen);
+        bool pressed = false;
+        for (const Finger& f : fingers) {
+            if (sStickActive && f.id == sStickFinger) {
+                continue;
             }
-            draw->AddCircleFilled(knob, g.radius * 0.42f, base, 32);
-        } else {
-            draw->AddCircleFilled(g.center, g.radius, pressed ? base : (base & 0x60FFFFFF), 32);
-            draw->AddCircle(g.center, g.radius, base, 32, 2.5f);
-            const ImVec2 size = ImGui::CalcTextSize(c.label);
-            draw->AddText(ImVec2(g.center.x - size.x * 0.5f, g.center.y - size.y * 0.5f), IM_COL32(0, 0, 0, 230),
-                          c.label);
+            if (Hit(c, g, f.pos, 1.15f)) {
+                pressed = true;
+            }
         }
+        if (i == kMenuIndex) {
+            if (pressed && !sMenuWasDown) {
+                SetSohMenuVisible(true);
+            }
+            sMenuWasDown = pressed;
+        } else if (pressed) {
+            bits |= c.bit;
+        }
+        DrawControl(draw, c, g, pressed, alpha * CtrlOpacity(c), false);
     }
 
     // The stick: a small dead zone, then the full N64 range (about +-85).
     const float mag = std::sqrt(stickX * stickX + stickY * stickY);
     int sx = 0, sy = 0;
-    if (mag > 0.12f) {
-        const float scale = (mag > 1.0f ? 1.0f / mag : 1.0f) * 85.0f;
-        sx = static_cast<int>(std::lround(stickX * scale));
-        sy = static_cast<int>(std::lround(-stickY * scale)); // screen y grows downwards
+    if (mag > 0.10f) {
+        const float scaled = std::min(1.0f, (mag - 0.10f) / 0.85f) / mag * 85.0f;
+        sx = static_cast<int>(std::lround(stickX * scaled));
+        sy = static_cast<int>(std::lround(-stickY * scaled)); // screen y grows downwards
     }
     sPadButtons = bits;
     sPadStickX = sx;
     sPadStickY = sy;
 }
 
-void DrawTouchSettings() {
-    if (!sOpen) {
-        return;
-    }
-    ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.8f),
-                             ImGuiCond_Appearing);
-    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.25f, ImGui::GetIO().DisplaySize.y * 0.12f),
-                            ImGuiCond_Appearing);
-    if (ImGui::Begin("Touch controls", &sOpen)) {
-        DrawTouchTab();
-    }
-    ImGui::End();
-}
-
+// The settings, drawn inside the SoH menu (Settings > Touch Controls).
 void DrawTouchTab() {
     bool enabled = Enabled();
     if (ImGui::Checkbox("Show touch controls", &enabled)) {
         CVarSetInteger("gAndroid.Touch.Enabled", enabled ? 1 : 0);
         CVarSave();
     }
+    bool floating = FloatingStick();
+    if (ImGui::Checkbox("Floating stick (appears where you touch, left side)", &floating)) {
+        CVarSetInteger("gAndroid.Touch.FloatingStick", floating ? 1 : 0);
+        CVarSave();
+    }
+    bool showMenu = ShowMenuButton();
+    if (ImGui::Checkbox("Show the MENU button (the back button always opens this menu)", &showMenu)) {
+        CVarSetInteger("gAndroid.Touch.ShowMenuButton", showMenu ? 1 : 0);
+        CVarSave();
+    }
     float opacity = Opacity();
-    if (ImGui::SliderFloat("Opacity", &opacity, 0.1f, 1.0f, "%.2f")) {
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.6f);
+    if (ImGui::SliderFloat("Opacity (all)", &opacity, 0.1f, 1.0f, "%.2f")) {
         CVarSetFloat("gAndroid.Touch.Opacity", opacity);
         CVarSave();
     }
     float scale = Scale();
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.6f);
     if (ImGui::SliderFloat("Size (all)", &scale, 0.5f, 2.0f, "%.2fx")) {
         CVarSetFloat("gAndroid.Touch.Scale", scale);
         CVarSave();
@@ -361,48 +555,34 @@ void DrawTouchTab() {
     if (ui <= 0.0f) {
         ui = ImGui::GetIO().FontGlobalScale;
     }
-    if (ImGui::SliderFloat("Menu size", &ui, 0.8f, 3.0f, "%.2fx")) {
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.6f);
+    if (ImGui::SliderFloat("Menu text size", &ui, 0.8f, 3.0f, "%.2fx")) {
         CVarSetFloat("gAndroid.UiScale", ui);
         ImGui::GetIO().FontGlobalScale = ui;
         CVarSave();
     }
 
-    ImGui::SeparatorText("Layout");
-    ImGui::Checkbox("Edit layout (drag the buttons)", &sEdit);
-    if (sEdit) {
-        ImGui::TextWrapped("Drag each button to where you want it. Close this window or untick the box when done.");
-        static int sSelected = 1;
-        for (int i = 0; i < kControlCount; i++) {
-            if (i > 0) {
-                ImGui::SameLine();
-            }
-            const bool picked = i == sSelected;
-            std::string label = std::string(sControls[i].kind == kStick ? "Stick" : sControls[i].label) + "##sel" + std::to_string(i);
-            if (ImGui::RadioButton(label.c_str(), picked)) {
-                sSelected = i;
-            }
-            if (i == 3 || i == 7) {
-                ImGui::NewLine();
-            }
-        }
-        Control& c = sControls[sSelected];
-        float r = CVarGetFloat(Key(c, "R").c_str(), c.r);
-        if (ImGui::SliderFloat("Size of the selected", &r, 0.03f, 0.25f, "%.3f")) {
-            CVarSetFloat(Key(c, "R").c_str(), r);
-            CVarSave();
-        }
+    ImGui::Spacing();
+    if (ImGui::Button("Edit layout")) {
+        // Closes this menu and shows the controls so each one (MENU included) can be dragged,
+        // resized and given its own opacity.
+        sEdit = true;
+        SetSohMenuVisible(false);
     }
+    ImGui::SameLine();
     if (ImGui::Button("Reset layout")) {
         for (const Control& c : sControls) {
             CVarClear(Key(c, "X").c_str());
             CVarClear(Key(c, "Y").c_str());
             CVarClear(Key(c, "R").c_str());
+            CVarClear(Key(c, "O").c_str());
         }
         CVarSetFloat("gAndroid.Touch.Scale", 1.0f);
         CVarSave();
     }
-    ImGui::TextDisabled("Controls: stick = move, A / B, C buttons (right stick), Z, L, R, Start.");
-    ImGui::TextDisabled("Change what each one does in the game's controller settings.");
+    ImGui::Spacing();
+    ImGui::TextDisabled("Stick = move, A / B, C buttons, Z, L, R, Start.");
+    ImGui::TextDisabled("Change what each button does in Settings > Controls.");
 }
 
 } // namespace SohAndroid
